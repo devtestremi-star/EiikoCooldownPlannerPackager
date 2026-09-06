@@ -48,9 +48,15 @@ function PK.Diagnose()
     PK:Print(("  pont : addon=|cffffd100%s|r version=%s api=%s")
         :format(tostring(b.addonName), tostring(b.version), tostring(b.apiVersion)))
 
-    if b.addonName ~= addonName:gsub("PackagerDev$", "Dev"):gsub("Packager$", "") then
-        -- Simple remarque : le Packager Dev s'attend normalement a parler a l'ECP Dev.
-        PK:Print("|cffffb0b0  (le pont vient d'une copie differente de celle attendue)|r")
+    -- Notre dossier est `<dossier d'ECP>_Packager` -- c'est l'underscore qui fait l'imbrication
+    -- dans la liste des addons du client. Retirer le suffixe donne donc DIRECTEMENT le nom de
+    -- l'ECP attendu, pour la copie Dev comme pour la publiee, sans rien a permuter a
+    -- l'empaquetage. (L'ancienne forme enchainait deux gsub sur « PackagerDev » / « Packager »,
+    -- inserés au MILIEU du nom : elle ne survit pas au renommage.)
+    local expected = addonName:gsub("_Packager$", "")
+    if b.addonName ~= expected then
+        PK:Print(("|cffffb0b0  (le pont vient de %s, on attendait %s)|r")
+            :format(tostring(b.addonName), expected))
     end
 
     -- 3. Ce qu'on atteint reellement a travers lui.

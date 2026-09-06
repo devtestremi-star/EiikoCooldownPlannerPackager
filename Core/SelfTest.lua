@@ -57,14 +57,21 @@ function T.RoundTrip(spec)
     if not str then ko("encode : %s", tostring(err)); return false end
     ok("encode : %d caracteres", #str)
 
-    -- Bornes du memo §12.4. On les verifie ICI, a la production : mieux vaut refuser tot
-    -- que de fabriquer une chaine que le lecteur rejettera sans que l'auteur comprenne.
+    -- Borne d'ENTREES (memo §12.4). C'est `Codec.Publish` qui la fait respecter pour de
+    -- vrai ; on la rappelle ici parce qu'un build de test ne passe pas par Publish.
     if nEnt > 100 then
-        ko("BORNE : %d entrees > 100. Le lecteur refusera.", nEnt)
+        ko("BORNE : %d entrees > 100. Le lecteur refuserait tout le catalogue.", nEnt)
     end
-    if #str > 512 * 1024 then
-        ko("BORNE : %d octets encodes, au-dela du plafond de lecture.", #str)
-    end
+
+    -- ⚠️ On NE teste PAS le plafond de 512 Ko, et c'est delibere.
+    -- Le lecteur borne `#cbor`, la charge DECOMPRESSEE (Share.DecodeRaw, MAX_DECOMPRESSED).
+    -- `#str` est le base64 du flux COMPRESSE : sur des tables de plan Deflate gagne un
+    -- facteur 3 a 10, donc un payload de 600 Ko decompresses tient dans ~60 a 200 Ko de
+    -- base64 et passerait ce controle haut la main -- pendant que le lecteur repondrait
+    -- « far too large. Nothing was read. » Un test qui NOMME la borne sans pouvoir se
+    -- declencher est pire que pas de test : il rassure a tort.
+    info("taille encodee : %d octets (le plafond du lecteur porte sur la charge "
+         .. "DECOMPRESSEE, non mesurable d'ici).", #str)
 
     local back, derr = PK.Codec.Decode(str)
     if not back then ko("decode : %s", tostring(derr)); return false end

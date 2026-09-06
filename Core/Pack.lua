@@ -26,9 +26,22 @@ Pack.NewId = PK.NewId
 -- « modifiee » a tort. L'essentiel n'est donc pas le hachage (aucune primitive n'existe
 -- dans l'API) mais la marche a CLES TRIEES. Une fois qu'on l'a, elle sert aussi bien a
 -- comparer qu'a produire un checksum destine a voyager.
+-- Un scalaire, rendu SANS AMBIGUITE : prefixe de type + separateurs echappes.
+--
+-- ⚠️ Deterministe ne suffit pas, il faut aussi INJECTIF. Avec un simple `tostring`, le
+-- nombre 5 et la chaine "5" donnent le meme texte, et un nom contenant `;` ou `=` peut
+-- imiter la structure d'une autre table -- donc deux contenus DIFFERENTS produisent la
+-- meme empreinte. Consequence concrete : une vraie modification passe pour « inchangee »,
+-- la puce n'affiche jamais son `*`, et c'est le snapshot PERIME qui part a la publication.
+-- C'est exactement ce que le checksum existe pour empecher.
+local function enc(x)
+    return type(x):sub(1, 1) .. (tostring(x):gsub("[%%=;{}]", function(ch)
+        return ("%%%02X"):format(ch:byte())
+    end))
+end
+
 local function walk(v, out)
-    local t = type(v)
-    if t == "table" then
+    if type(v) == "table" then
         local keys = {}
         for k in pairs(v) do keys[#keys + 1] = k end
         -- Tri sur (type, valeur) : une table peut melanger cles numeriques et chaines,
@@ -40,14 +53,14 @@ local function walk(v, out)
         end)
         out[#out + 1] = "{"
         for _, k in ipairs(keys) do
-            out[#out + 1] = tostring(k)
+            out[#out + 1] = enc(k)
             out[#out + 1] = "="
             walk(v[k], out)
             out[#out + 1] = ";"
         end
         out[#out + 1] = "}"
     else
-        out[#out + 1] = tostring(v)
+        out[#out + 1] = enc(v)
     end
 end
 
@@ -145,6 +158,10 @@ function Pack.AddVariant(spec, dID, variant)
     local ecp = PK.ECP()
     if not (ecp and variant) then return nil end
     if not PK.CanPackage(variant) then return nil end
+    -- La spe du pack et celle de la variante doivent coincider. Le pack ne retient ensuite
+    -- que le `variantId` : sans ce controle, rien ne rattacherait plus jamais l'entree a la
+    -- spe sous laquelle elle voyage, et on publierait un plan Holy dans un catalogue Disc.
+    if spec and variant.healer ~= spec then return nil end
 
     local p = Pack.GetOrCreate(spec, dID)
     if not p then return nil end
@@ -207,6 +224,12 @@ function Pack.RefreshEntry(p, variant)
     local ecp = PK.ECP()
     local e = Pack.FindEntry(p, variant and variant.id)
     if not (ecp and e) then return false end
+    -- ⚠️ La spe a pu DERIVER depuis l'ajout : l'auteur change le heal de sa variante dans
+    -- ECP, et refiger ici baquerait ce nouveau `healer` dans un pack qui voyage sous
+    -- l'ancienne spe. L'entree reste alors visible (le fingerprint la marque « modifiee »,
+    -- il inclut `healer`) mais on refuse de la refiger : a l'auteur de la retirer et de la
+    -- rajouter sous la bonne spe.
+    if p and p.spec and variant.healer ~= p.spec then return false end
     e.name        = variant.name
     e.snapshot    = Snapshot(ecp, variant, p and p.dID)
     e.fingerprint = Pack.Fingerprint(variant)       -- la VIVANTE, cf. Snapshot
@@ -253,8 +276,11 @@ function PK.CanPackage(v)
     if type(v) ~= "table" then return false end          -- echouer FERME
     if v.synced then return false end                    -- plan recu d'un tiers : jamais
     local ecp = PK.ECP()
-    if ecp and type(ecp.CanEditVariant) == "function" then
-        return ecp.CanEditVariant(v) and true or false   -- couvre les variantes promues
-    end
-    return true
+    -- ⚠️ Sans le pont on ne peut pas savoir si la variante est liee a un catalogue : on
+    -- REFUSE. « Echouer ferme » vaut aussi -- surtout -- quand l'information manque ; un
+    -- garde qui autorise en cas de doute ne garde rien (memo §11.2). Cette branche rendait
+    -- `true`, ce que les appelants actuels rendent inatteignable, mais la prochaine voie
+    -- d'appel ne le saurait pas.
+    if not (ecp and type(ecp.CanEditVariant) == "function") then return false end
+    return ecp.CanEditVariant(v) and true or false       -- couvre les variantes promues
 end

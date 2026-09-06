@@ -42,19 +42,14 @@ local selSpec, hoverChip
 -- Acces a ECP (lecture seule -- cf. Core/Bridge.lua)
 --------------------------------------------------------------------------------
 
--- Tronque a `maxChars` CARACTERES, pas a maxChars octets.
--- ⚠️ `#s` compte des OCTETS : couper dedans un caractere accentue produit un remplacement
--- invalide (le fameux losange noir), et les noms de variantes en portent souvent. On avance
--- donc caractere par caractere -- en UTF-8, un octet de tete est < 0x80 ou >= 0xC0.
+-- Tronque a `maxChars` CARACTERES, pas a maxChars octets (`#s` compte des OCTETS, et couper
+-- dedans un caractere accentue produit le fameux losange noir).
+-- L'implementation est UNIQUE, chez ECP (`HR.TruncateUTF8`) -- elle sert aussi a la
+-- troncature de transport du codec. Repli local si le pont manque.
 local function truncate(s, maxChars)
     if type(s) ~= "string" then return "" end
-    local n, i, len = 0, 1, #s
-    while i <= len do
-        local b = s:byte(i)
-        local step = (b < 0x80 and 1) or (b < 0xE0 and 2) or (b < 0xF0 and 3) or 4
-        if n == maxChars then return s:sub(1, i - 1) .. "..." end
-        n, i = n + 1, i + step
-    end
+    local ecp = PK.ECP()
+    if ecp and ecp.TruncateUTF8 then return ecp.TruncateUTF8(s, maxChars, "...") end
     return s
 end
 

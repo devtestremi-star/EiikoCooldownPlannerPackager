@@ -1,0 +1,21 @@
+## Interface: 120100
+## Title: ECP Packager (Dev)
+## Notes: Author tool: build and publish catalogues of plan variants for ECP.
+## Author: Eiiko
+## Version: 1.2.1
+## IconTexture: Interface\Icons\INV_Misc_Book_11
+## Category: Mythic+
+## Dependencies: EiikoCooldownPlannerDev
+## SavedVariables: ECPPackagerDB
+
+Core\Constants.lua
+Core\Bridge.lua
+Core\Database.lua
+Core\Creator.lua
+Core\Pack.lua
+Core\Codec.lua
+Core\SelfTest.lua
+Core\Diagnose.lua
+UI\Window.lua
+UI\CreatorFrame.lua
+Core\Commands.lua

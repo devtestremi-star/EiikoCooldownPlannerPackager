@@ -1,8 +1,17 @@
 -- ECP Packager - UI/CreatorFrame.lua
 -- Ecran du PROFIL CREATEUR (memo §7). Batie avec les composants d'ECP, comme le reste.
+--
+-- ⚠️ Les champs RESEAUX (twitch / x / discord) sont MASQUES : on ne demande plus que le
+-- pseudo. Le modele les garde (`Creator.FIELDS`, `Creator.Set/Get`) -- meme statut que
+-- `Creator.Restore` : de la logique deja ecrite qu'on ne jette pas -- mais plus rien ne les
+-- saisit, et `Codec.CreatorCard` ne les emet plus.
+--
+-- Une valeur deja enregistree n'est PAS effacee : on ne touche pas aux donnees du joueur,
+-- elle dort dans la base. Les rouvrir = remettre les trois `Field()` ici et les trois
+-- lignes dans la carte du codec. Rien d'autre.
 local addonName, PK = ...
 
-local W, H   = 460, 300
+local W, H   = 460, 210
 local PAD    = 16
 local ROW    = 30
 local LBL_W  = 90
@@ -53,10 +62,7 @@ local function Build()
         .. "It is a declared identity, not a proof.")
     y = y - 44
 
-    m.name    = Field(c, y, "Name",    "public handle");  y = y - ROW
-    m.twitch  = Field(c, y, "Twitch",  "");               y = y - ROW
-    m.x       = Field(c, y, "X",       "");               y = y - ROW
-    m.discord = Field(c, y, "Discord", "");               y = y - ROW - 12
+    m.name = Field(c, y, "Name", "public handle");  y = y - ROW
 
     -- ⚠️ L'identifiant de createur n'est NI AFFICHE NI EDITABLE (decision). Il est genere
     -- une fois, en silence, et voyage dans chaque pack -- mais il ne se montre pas.
@@ -67,10 +73,7 @@ local function Build()
     -- demanderait qu'un point d'entree, pas une refonte.
 
     m.save = C.TextButton(c, { text = "Save", width = 110, onClick = function()
-        PK.Creator.Set("name",    m.name:GetText())
-        PK.Creator.Set("twitch",  m.twitch:GetText())
-        PK.Creator.Set("x",       m.x:GetText())
-        PK.Creator.Set("discord", m.discord:GetText())
+        PK.Creator.Set("name", m.name:GetText())
         PK.Creator.EnsureId()      -- genere l'identifiant au premier enregistrement
         PK.RenderCreator()
         if PK.RefreshWindow then PK.RefreshWindow() end
@@ -89,9 +92,6 @@ function PK.RenderCreator()
     if not m then return end
     local c = PK.Creator.Get()
     m.name:SetText(c.name or "")
-    m.twitch:SetText(c.twitch or "")
-    m.x:SetText(c.x or "")
-    m.discord:SetText(c.discord or "")
 end
 
 function PK.ToggleCreator()

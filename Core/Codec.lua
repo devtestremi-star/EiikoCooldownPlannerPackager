@@ -34,9 +34,14 @@ local PAYLOAD_V   = 1          -- version de la STRUCTURE du payload
 -- ⚠️ Constante de FORMAT, surtout PAS `PK.VERSION` (memo §12.2 / §6.2). Stamper la version
 -- courante de l'auteur verrouillerait un lecteur en 1.3.0 qui sait pourtant lire le format.
 -- A ne bumper que si le format change vraiment.
-local MIN_READER_VERSION = "1.2.0"
+local MIN_READER_VERSION = "1.2.1"   -- ⚠️ La version qui LIVRE le lecteur
+                                     -- (ECP/Core/Catalog.lua). Annoncer plus haut que
+                                     -- ca rendrait toute chaine produite aujourd'hui
+                                     -- illisible par la seule version capable de la lire,
+                                     -- le jour ou le garde du §6.1 sera implemente.
 
-local TEXT_MAX = 64            -- memo §12.4 : on TRONQUE ce qui s'affiche
+local TEXT_MAX    = 64         -- memo §12.4 : on TRONQUE ce qui s'affiche
+local MAX_ENTRIES = 100        -- memo §12.4 : la MEME borne que le lecteur applique
 
 -- (Pas d'enum d'encodage ici : ils vivent chez ECP, dans Share.lua. C'est precisement
 --  le doublon qu'on evite -- deux jeux d'enum qui divergent = chaines illisibles.)
@@ -48,10 +53,17 @@ local TEXT_MAX = 64            -- memo §12.4 : on TRONQUE ce qui s'affiche
 -- « On tronque ce qui s'affiche, on valide ce qui identifie » (memo §12.4).
 -- Ceci est la moitie « tronquer ». Un texte trop long est une maladresse, pas une attaque :
 -- il ne doit jamais faire echouer une publication.
+-- ⚠️ Sur les CARACTERES, pas les octets : `s:sub(1, n)` couperait un accent en deux, et
+-- une sequence UTF-8 invalide peut faire REFUSER la serialisation CBOR -- donc echouer
+-- toute la publication sur un « Encoding failed » muet. La saisie est bornee a 64
+-- CARACTERES (CreatorFrame), soit jusqu'a 128 octets : le cas se produit pour de vrai.
+-- Implementation unique chez ECP (HR.TruncateUTF8) ; repli local si le pont manque.
 local function text(s)
     if type(s) ~= "string" then return nil end
     s = strtrim(s)
     if s == "" then return nil end
+    local ecp = PK.ECP()
+    if ecp and ecp.TruncateUTF8 then return ecp.TruncateUTF8(s, TEXT_MAX) end
     return s:sub(1, TEXT_MAX)
 end
 
@@ -59,19 +71,22 @@ end
 -- Construction du payload
 --------------------------------------------------------------------------------
 
--- Carte createur, une SEULE fois pour tout le conteneur (memo §10.4). La stocker par pack
--- donnerait N copies divergentes des memes reseaux.
+-- Carte createur, une SEULE fois pour tout le conteneur (memo §10.4).
 -- `at` date le PROFIL, pas la publication : c'est lui qui arbitre quelle carte gagne chez
 -- un destinataire qui importe des packs dans le desordre (memo §7.5).
+--
+-- ⚠️ Les RESEAUX (twitch / x / discord) ne voyagent PLUS : l'ecran ne les saisit plus, on ne
+-- garde que le pseudo. Ils sont retires ICI aussi, pas seulement de l'ecran -- une valeur
+-- saisie avant ce changement dort encore en base, et continuer a la publier ferait partir
+-- une donnee que l'auteur ne voit nulle part et ne peut plus corriger. Rien n'est efface en
+-- base (on ne touche pas aux donnees du joueur) ; les rouvrir = remettre ces trois lignes.
+-- Le lecteur, lui, accepte toujours les six champs (`Cat.Apply`) : absents = nil.
 local function CreatorCard()
     local c = PK.Creator.Get()
     return {
-        id      = c.id,                 -- valide : la publication l'exige (Codec.Publish)
-        name    = text(c.name),
-        at      = c.at,
-        twitch  = text(c.twitch),
-        x       = text(c.x),
-        discord = text(c.discord),
+        id   = c.id,                    -- valide : la publication l'exige (Codec.Publish)
+        name = text(c.name),
+        at   = c.at,
     }
 end
 
@@ -108,8 +123,18 @@ function Codec.BuildContainer(spec)
             local entries = {}
             for _, e in ipairs(p.entries) do
                 local w = WireEntry(e)
-                if w then entries[#entries + 1] = w end   -- TABLEAU : l'ordre porte de
-            end                                           -- l'information (§12.5)
+                -- ⚠️ SAUTER une entree n'est PAS anodin : un pack est un INSTANTANE, donc
+                -- une entree absente du fil ORDONNE au lecteur de la supprimer de son
+                -- catalogue (§10.5). Un snapshot casse deviendrait une revocation
+                -- silencieuse chez tous les importateurs, pendant que le recap de la
+                -- fenetre continue de l'annoncer. On refuse la publication.
+                if not w then
+                    return nil, ("Entry \"%s\" has no usable snapshot. Re-add it, "
+                        .. "or remove it from the pack, then publish again."):format(
+                            tostring(e.name or e.catalogVariantId))
+                end
+                entries[#entries + 1] = w   -- TABLEAU : l'ordre porte de l'info (§12.5)
+            end
             -- Un pack a ZERO entree veut dire « supprime TOUT dans ce donjon » (memo §10.6) :
             -- le geste le plus destructif du systeme. On ne l'emet que s'il a un sens --
             -- c'est-a-dire si ce pack a DEJA ete diffuse et qu'il y a donc quelque chose a
@@ -159,6 +184,10 @@ end
 -- ou (nil, message). Sert au futur import cote joueur et a un aller-retour de test.
 function Codec.Decode(str)
     if type(str) ~= "string" then return nil, "Empty string." end
+    -- Menage des CR AVANT de decouper, comme le lecteur d'ECP : une chaine collee depuis
+    -- Discord ou le Bloc-notes arrive en CRLF, `kind` capturerait « catalog<CR> », et on
+    -- accuserait une chaine parfaitement saine d'etre corrompue.
+    str = str:gsub("\r", "")
     local fmt, kind, b64 = str:match("^%s*ecp;(%d+);([^\n]*)\n(.*)$")
     if not fmt then return nil, "This is not an ECP string." end
     if tonumber(fmt) ~= WIRE_FORMAT or kind ~= WIRE_KIND then
@@ -182,8 +211,19 @@ function Codec.Publish(spec)
     if not PK.Creator.IsComplete() then
         return nil, "Set your creator profile first (name + ID) -- see the Creator button."
     end
+    -- BuildContainer rend (nil, message) quand elle REFUSE, et (nil) quand il n'y a
+    -- simplement rien : `nPacks` porte alors le motif.
     local payload, nPacks, nEntries = Codec.BuildContainer(spec)
-    if not payload then return nil, "No pack to publish for this spec." end
+    if not payload then return nil, nPacks or "No pack to publish for this spec." end
+
+    -- ⚠️ Borne du memo §12.4, verifiee A LA PRODUCTION -- pas seulement dans /ecpp test.
+    -- Sans ca l'auteur fabrique et DIFFUSE une chaine que tous les lecteurs rejettent en
+    -- bloc (« declares N variants, limit 100. Nothing was read. »), sans que rien de son
+    -- cote ne lui ait dit pourquoi. Une chaine diffusee ne se rattrape pas.
+    if nEntries > MAX_ENTRIES then
+        return nil, ("This spec totals %d variants (limit %d). Readers would refuse the "
+            .. "whole catalogue. Split it, or remove some."):format(nEntries, MAX_ENTRIES)
+    end
 
     local str, err = Codec.Encode(payload)
     if not str then return nil, err end
